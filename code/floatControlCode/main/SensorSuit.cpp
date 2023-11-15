@@ -22,8 +22,15 @@ bool SensorSuite::selfTestAllSensors() {
         }
 
 }
-SensorReadings SensorSuite::sampleScienceSensors(){
 
+SensorReadings SensorSuite::sampleScienceSensors(){
+    return NULL;
+}
+
+SensorReadings SensorSuite::sampleEngSensors(){
+    dht22Reading = dht22Humidity.sample();
+
+    return dht22Reading;
 }
 // SensorReadings sampleScienceSensors();
 // SensorReadings sampleEngSensors();
