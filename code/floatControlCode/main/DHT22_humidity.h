@@ -1,20 +1,21 @@
 #ifndef DHT22_HUMIDITY_H
 #define DHT22_HUMIDITY_H
 
-#include "sensorReadings.h"
+#include <Arduino.h>
+#include <DHT_U.h>
+#include "SensorReadings.h"
+#include "Sensor.h"
 
-class SensorSuit; // Forward declarationt to avoid circular dependency
-
-class DHT22Humidity{
+class DHT22Humidity : public Sensor{
 public:
-
-    void init();
-    SensorReadings sample();
-    bool selfTest();
+    DHT22Humidity(DHT_Unified*);
+    
+    void init() override;
+    SensorReadings sample() override;
+    bool selfTest() override;
 
 private:
-    const int dataPin = 15;
-    SensorSuit* sensorSuit;
+    DHT_Unified* dht;
 
 };
 

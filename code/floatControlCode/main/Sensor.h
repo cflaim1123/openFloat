@@ -6,7 +6,7 @@
 class Sensor {
 public:
     virtual void init() = 0;
-    virtual SensorValues sample() = 0;
+    virtual SensorReadings sample() = 0;
     virtual bool selfTest() = 0;
 };
 
