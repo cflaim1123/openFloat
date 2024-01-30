@@ -36,11 +36,13 @@
 #include "RTClib.h"
 #include "FS.h"
 #include <SD.h>
-
+// GPS
+#include <Adafruit_GPS.h>
 // External pressure
 // #include "MS5803_05.h" 
 
-
+////////// GPS serial port ////////// 
+#define GPSSerial Serial1
 ////////// sensors pins ////////// 
 // External digital temp
 #define DS18B20_DATA_PIN 37
@@ -56,7 +58,7 @@
 #define RADIO_GO 12
 #define RADIO_RST 27
 // GPS
-#define GPS_RST 26 // A0
+#define GPS_EN 26 // A0
 // Thermistor
 #define THERMISTOR_ADC 36 // A4
 
@@ -117,6 +119,17 @@ struct FloatData{
 
 
   } accelerometerReading;
+
+
+  struct GpsReading {
+    DateTime time;
+    // uint8_t hour, minute, seconds, day, month;
+    // uint16_t year;
+    float latitude, longitude, speed, altitude;
+    // float angle;
+    uint8_t fixquality;
+    // unint8_t fix, satellites, antenna;
+  } gpsReading;
 } floatData;
 
 ////////// create sensor suit ////////// 
@@ -127,6 +140,7 @@ struct FloatData{
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire);
 SFE_BMP180 bmp180;
 RTC_PCF8523 rtc;
+Adafruit_GPS GPS(&GPSSerial);
 
 DateTime now;
 int missionNum = 0;
@@ -142,19 +156,6 @@ void setup() {
   SPI.begin(SCK, MISO, MOSI, SD_CS);
   Wire.begin();
   init();
-
-  sprintf(dataSavePath, "/mission%ddata.csv", missionNum);
-  if(!SD.exists(dataSavePath)){
-    char fileTop[64];
-    char equippedSensors[] = "openFloat is outfitted with bmp180, pcf8523, microsd reader,\nBNO055, adafruit ultimate gps, 915 mhz LoRa module, DHT22, DS18b20(x3),\nthermistor, MS8503-05 BA, TSl2591, INA219\n";
-    char fileHead[] = "Time, bmpInternalTemp, bmpInternalPress, orientX, orientY, orientZ, gyroX, gyroY, gyroZ, linearX, linearY, linarZ, magX, magY, magZ, acclX, accY, accZ, gravX, gravY, gravZ\n";
-    
-    sprintf(fileTop, "Mission %d on %02d/%02d/%02d\n", missionNum, 
-            floatData.turnOnTime.year(), floatData.turnOnTime.month(), floatData.turnOnTime.day());
-
-    writeGeneralInfoToCard(dataSavePath, fileTop, equippedSensors, fileHead);
-  }
-
 }
 
 void loop() {
@@ -172,6 +173,7 @@ void loop() {
 
 void init(){
   initBoard1();
+  initBoard2();
 }
 
 void initBoard1(){
@@ -183,35 +185,49 @@ void initBoard1(){
   initBmp180();
   delay(50);
   initBNO055();
+}
 
+void initBoard2(){
+  initGps();
 }
 
 void initSdReader(){
-    if(!SD.begin()){
-        Serial.println("Card Mount Failed");
-        return;
-    }
-    uint8_t cardType = SD.cardType();
+  if(!SD.begin()){
+      Serial.println("Card Mount Failed");
+      return;
+  }
+  uint8_t cardType = SD.cardType();
 
-    if(cardType == CARD_NONE){
-        Serial.println("No SD card attached");
-        return;
-    }
+  if(cardType == CARD_NONE){
+      Serial.println("No SD card attached");
+      return;
+  }
 
-    Serial.println("SD card init success");
-    Serial.print("SD Card Type: ");
-    if(cardType == CARD_MMC){
-        Serial.println("MMC");
-    } else if(cardType == CARD_SD){
-        Serial.println("SDSC");
-    } else if(cardType == CARD_SDHC){
-        Serial.println("SDHC");
-    } else {
-        Serial.println("UNKNOWN");
-    }
+  Serial.println("SD card init success");
+  Serial.print("SD Card Type: ");
+  if(cardType == CARD_MMC){
+      Serial.println("MMC");
+  } else if(cardType == CARD_SD){
+      Serial.println("SDSC");
+  } else if(cardType == CARD_SDHC){
+      Serial.println("SDHC");
+  } else {
+      Serial.println("UNKNOWN");
+  }
 
-    uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-    Serial.printf("SD Card Size: %lluMB\n", cardSize);
+  uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+  Serial.printf("SD Card Size: %lluMB\n", cardSize);
+
+  sprintf(dataSavePath, "/mission%ddata.csv", missionNum);
+  if(!SD.exists(dataSavePath)){
+    char fileTop[64];
+    char equippedSensors[] = "openFloat is outfitted with bmp180, pcf8523, microsd reader,\nBNO055, adafruit ultimate gps, 915 mhz LoRa module, DHT22, DS18b20(x3),\nthermistor, MS8503-05 BA, TSl2591, INA219\n";
+    char fileHead[] = "Time, bmpInternalTemp, bmpInternalPress, orientX, orientY, orientZ, gyroX, gyroY, gyroZ, linearX, linearY, linarZ, magX, magY, magZ, acclX, accY, accZ, gravX, gravY, gravZ, latitude, longitude, gpsAltitude, gpsFixQuality, gpsSpeed, gpsDateTime\n";
+  
+    sprintf(fileTop, "Mission %d on %02d/%02d/%02d\n", missionNum, 
+            floatData.turnOnTime.year(), floatData.turnOnTime.month(), floatData.turnOnTime.day());
+    writeGeneralInfoToCard(dataSavePath, fileTop, equippedSensors, fileHead);
+  }
 }
 
 void initPcf8523(){
@@ -259,6 +275,19 @@ void initBmp180(){
   digitalWrite(BMP180_power, LOW);
 }
 
+void initGps(){
+  GPS.begin(9600);
+  // uncomment this line to turn on RMC (recommended minimum) and GGA (fix data) including altitude
+  GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
+  // Set the update rate
+  GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
+  // Request updates on antenna status, comment out to keep quiet
+  GPS.sendCommand(PGCMD_ANTENNA);
+  delay(1000);
+  // Ask for firmware version
+  GPSSerial.println(PMTK_Q_RELEASE);
+  Serial.println("Adafruit GPS init success");
+}
 
 
 /*******************************************************************************/
@@ -269,6 +298,7 @@ void sample(){
   sampleBmp180();
   sampleTime();
   sampleBNO055();
+  sampleGps();
 
 }
 
@@ -389,7 +419,38 @@ void sampleBNO055(){
   // Serial.println("--");
 }
 
+void sampleGps(){
+  while (!GPS.available());
+  char c = GPS.read();
 
+  if (GPS.newNMEAreceived()) {
+    Serial.println(GPS.lastNMEA());
+    // Parse the received NMEA sentence
+    if (GPS.parse(GPS.lastNMEA())) {
+      // Extract data from the GPS object
+      // floatData.gpsReading.hour = GPS.hour;
+      // floatData.gpsReading.minute = GPS.minute;
+      // floatData.gpsReading.seconds = GPS.seconds;
+      // floatData.gpsReading.day = GPS.day;
+      // floatData.gpsReading.month = GPS.month;
+      // floatData.gpsReading.year = GPS.year;
+      floatData.gpsReading.latitude = GPS.latitude;
+      floatData.gpsReading.longitude = GPS.longitude;
+      floatData.gpsReading.speed = GPS.speed;
+      // floatData.gpsReading.angle = GPS.angle;
+      floatData.gpsReading.altitude = GPS.altitude;
+      // floatData.gpsReading.fix = GPS.fix;
+      floatData.gpsReading.fixquality = GPS.fixquality;
+      // floatData.gpsReading.satellites = GPS.satellites;
+      // floatData.gpsReading.antenna = GPS.antenna;
+
+      int year = GPS.year + 2000;
+      floatData.gpsReading.time = DateTime(year, GPS.month, GPS.day, GPS.hour, GPS.minute, GPS.seconds);
+
+      // Note: SHOULD MAKE STRUCT HOLD CHAR LIST AS TIME INSTEAD OF DATETIME SO IT CAN BE PRINTED
+    }
+  }
+}
 
 ////////// write data to sd card ////////// 
 void writeGeneralInfoToCard(const char *dataSavePath, const char *fileTop, const char*equippedSensors, const char *fileHead){
@@ -404,9 +465,9 @@ void writeGeneralInfoToCard(const char *dataSavePath, const char *fileTop, const
 }
 
 void writeToFile(const char *dataSavePath){
-  char dataLine[512];
-  // "Time, bmpInternalTemp, bmpInternalPress, orientX, orientY, orientZ, gyroX, gyroY, gyroZ, linearX, linearY, linarZ, magX, magY, magZ, acclX, accY, accZ, gravX, gravY, gravZ";
-  sprintf(dataLine, "%02d/%02d/%02d %02hhu:%02hhu:%02hhu, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f\n", floatData.time.dateAndTime.year(), 
+  char dataLine[1000];
+  // "Time, bmpInternalTemp, bmpInternalPress, orientX, orientY, orientZ, gyroX, gyroY, gyroZ, linearX, linearY, linarZ, magX, magY, magZ, acclX, accY, accZ, gravX, gravY, gravZ, latitude, longitude, gpsAltitude, gpsFixQuality, gpsSpeed, gpsDateTime\n";
+  sprintf(dataLine, "%02d/%02d/%02d %02hhu:%02hhu:%02hhu, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %f, %f, %f, %.2d, %.2f, %02d/%02d/%02d %02hhu:%02hhu:%02hhu\n", floatData.time.dateAndTime.year(), 
           floatData.time.dateAndTime.month(), floatData.time.dateAndTime.day(), 
           floatData.time.dateAndTime.hour(), floatData.time.dateAndTime.minute(), 
           floatData.time.dateAndTime.second(), floatData.bmp180Reading.temp, floatData.bmp180Reading.press,
@@ -418,7 +479,9 @@ void writeToFile(const char *dataSavePath){
           floatData.accelerometerReading.mag.Y, floatData.accelerometerReading.mag.Z,
           floatData.accelerometerReading.accl.X, floatData.accelerometerReading.accl.Y,
           floatData.accelerometerReading.accl.Z, floatData.accelerometerReading.gravity.X,
-          floatData.accelerometerReading.gravity.Y, floatData.accelerometerReading.gravity.Z);
+          floatData.accelerometerReading.gravity.Y, floatData.accelerometerReading.gravity.Z,
+          floatData.gpsReading.latitude, floatData.gpsReading.longitude, floatData.gpsReading.altitude,
+          floatData.gpsReading.fixquality, floatData.gpsReading.speed, floatData.gpsReading.time);
 
   appendFile(SD, dataSavePath, dataLine);
 }
@@ -598,6 +661,18 @@ void printEverything(){
   Serial.print(floatData.accelerometerReading.gravity.Y);
   Serial.print(" Z: ");
   Serial.println(floatData.accelerometerReading.gravity.Z);
+  Serial.print("Lat: ");
+  Serial.println(floatData.gpsReading.latitude);
+  Serial.print("Long: ");
+  Serial.println(floatData.gpsReading.longitude);
+  Serial.print("GPS fix quality: ");
+  Serial.println(floatData.gpsReading.fixquality);
+  Serial.print("GPS altitude: ");
+  Serial.println(floatData.gpsReading.altitude);
+  Serial.print("GPS speed: ");
+  Serial.print(floatData.gpsReading.speed);
+  // Serial.print("GPS time: ");
+  // Serial.println(floatData.gpsReading.time);
   Serial.println();
 }
 
