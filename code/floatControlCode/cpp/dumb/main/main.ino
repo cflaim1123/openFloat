@@ -25,8 +25,8 @@
 #include <Adafruit_Sensor.h>
 
 // internal humidity
-// #include <DHT.h>
-// #include <DHT_U.h>
+#include <DHT.h>
+#include <DHT_U.h>
 // IMU
 #include <Adafruit_BNO055.h>
 #include <utility/imumaths.h>
@@ -40,6 +40,10 @@
 #include <Adafruit_GPS.h>
 // External pressure
 // #include "MS5803_05.h" 
+// Radio
+#include <LoRa.h>
+// Lux sensor
+#include "Adafruit_TSL2591.h"
 
 ////////// GPS serial port ////////// 
 #define GPSSerial Serial1
@@ -53,16 +57,37 @@
 // SD reader
 #define SD_CS 33 //const int8_t SD_CS = 33;
 // Radio
-#define RADIO_CS 13
+#define RADIO_CS 12
 #define RADIO_EN 25 // A1
-#define RADIO_GO 12
-#define RADIO_RST 27
+#define RADIO_GO 13 // desolderd
+#define RADIO_RST 27 // desoldered
 // GPS
 #define GPS_EN 26 // A0
 // Thermistor
 #define THERMISTOR_ADC 36 // A4
 
+#define DHTTYPE DHT22
+
 uint64_t  floatStart = millis();
+
+
+////////// create sensor suit ////////// 
+
+// make sensor objects
+// board 1
+Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire);
+SFE_BMP180 bmp180;
+RTC_PCF8523 rtc;
+Adafruit_GPS GPS(&GPSSerial);
+DHT_Unified dht(DHT22_DATA_PIN, DHTTYPE);
+// Adafruit_TSL2591 tsl = Adafruit_TSL2591(2591); 
+
+DateTime now;
+int missionNum = 0;
+char globalTime[] = "%02d/%02d/%02d %02hhu:%02hhu:%02hhu";
+char dataSavePath[64];
+String tempHolder;
+
 
 // Make data structure to hold float sensor values
 struct FloatData{
@@ -70,8 +95,8 @@ struct FloatData{
   DateTime turnOnTime;
 
   struct Bmp180Reading{
-    float temp;
-    float press;
+    float temp, press;
+
   } bmp180Reading;
 
   struct Time{
@@ -82,44 +107,29 @@ struct FloatData{
     int8_t boardTemp;
 
     struct Orientation{
-      float X;
-      float Y;
-      float Z;
+      float X, Y, Z;
     } orientation;
 
     struct Gyro{
-      float X;
-      float Y;
-      float Z;
+      float X, Y, Z;
     } gyro;
 
     struct Linear{
-      float X;
-      float Y;
-      float Z;
+      float X, Y, Z;
     } linear; 
 
     struct Mag{
-      float X;
-      float Y;
-      float Z;
+      float X, Y, Z;
     } mag; 
 
     struct Accl{
-      float X;
-      float Y;
-      float Z;
+      float X, Y, Z;
     } accl;
 
     struct Gravity{
-      float X;
-      float Y;
-      float Z;
+      float X, Y, Z;
     } gravity;
-
-
   } accelerometerReading;
-
 
   struct GpsReading {
     DateTime time;
@@ -132,27 +142,14 @@ struct FloatData{
   } gpsReading;
 } floatData;
 
-////////// create sensor suit ////////// 
-// #define DHTTYPE DHT22
-
-// make sensor objects
-// board 1
-Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire);
-SFE_BMP180 bmp180;
-RTC_PCF8523 rtc;
-Adafruit_GPS GPS(&GPSSerial);
-
-DateTime now;
-int missionNum = 0;
-char globalTime[] = "%02d/%02d/%02d %02hhu:%02hhu:%02hhu";
-char dataSavePath[64];
-String tempHolder;
-// DHT_Unified dht(DHT22_DATA_PIN, DHTTYPE);
-
 /*******************************************************************************/
 ////////// main loop ////////// 
 void setup() {
+  // digitalWrite(12, HIGH);
+  LoRa.setPins(RADIO_CS); // set lora cspin for shutting it off purposes
   Serial.begin(115200);
+  shutOffTheRadio(); // Work around so that SD card works
+  digitalWrite(25, LOW); // Turn off Radio power
   SPI.begin(SCK, MISO, MOSI, SD_CS);
   Wire.begin();
   init();
@@ -170,14 +167,24 @@ void loop() {
 
 
 ////////// inits ////////// 
+void shutOffTheRadio(){
+  if (!LoRa.begin(915E6)) {
+    Serial.println("Starting LoRa failed!");
+    while (1);
+  }
+  Serial.println("Radio shut off! SD shoudl work!");
+}
 
 void init(){
   initBoard1();
+  delay(50);
   initBoard2();
+  delay(50);
+  initBoard4();
+  delay(50);
 }
 
 void initBoard1(){
-  // initBNO055();
   initSdReader();
   delay(50);
   initPcf8523();
@@ -191,6 +198,10 @@ void initBoard2(){
   initGps();
 }
 
+void initBoard4(){
+  initDht22();
+  // initTsl2591();
+}
 void initSdReader(){
   if(!SD.begin()){
       Serial.println("Card Mount Failed");
@@ -289,7 +300,78 @@ void initGps(){
   Serial.println("Adafruit GPS init success");
 }
 
+void initDht22(){
+  dht.begin();
+  Serial.println("DHT22 init success");
 
+  sensors_event_t event;
+  dht.temperature().getEvent(&event);
+  if (isnan(event.temperature)) {
+    Serial.println(F("Error reading temperature!"));
+  }
+  else {
+    Serial.print(F("Temperature: "));
+    Serial.print(event.temperature);
+    Serial.println(F("°C"));
+  }
+  // Get humidity event and print its value.
+  dht.humidity().getEvent(&event);
+  if (isnan(event.relative_humidity)) {
+    Serial.println(F("Error reading humidity!"));
+  }
+  else {
+    Serial.print(F("Humidity: "));
+    Serial.print(event.relative_humidity);
+    Serial.println(F("%"));
+  }
+
+}
+
+// void initTsl2591(){
+//   if (tsl.begin()) 
+//   {
+//     Serial.println(F("Found a TSL2591 sensor"));
+//   } 
+//   else 
+//   {
+//     Serial.println(F("No sensor found ... check your wiring?"));
+//     while (1);
+//   }
+
+//   // // You can change the gain on the fly, to adapt to brighter/dimmer light situations
+//   // //tsl.setGain(TSL2591_GAIN_LOW);    // 1x gain (bright light)
+//   // tsl.setGain(TSL2591_GAIN_MED);      // 25x gain
+//   // //tsl.setGain(TSL2591_GAIN_HIGH);   // 428x gain
+  
+//   // // Changing the integration time gives you a longer time over which to sense light
+//   // // longer timelines are slower, but are good in very low light situtations!
+//   // //tsl.setTiming(TSL2591_INTEGRATIONTIME_100MS);  // shortest integration time (bright light)
+//   // // tsl.setTiming(TSL2591_INTEGRATIONTIME_200MS);
+//   // tsl.setTiming(TSL2591_INTEGRATIONTIME_300MS);
+//   // // tsl.setTiming(TSL2591_INTEGRATIONTIME_400MS);
+//   // // tsl.setTiming(TSL2591_INTEGRATIONTIME_500MS);
+//   // // tsl.setTiming(TSL2591_INTEGRATIONTIME_600MS);  // longest integration time (dim light)
+
+//   // /* Display the gain and integration time for reference sake */  
+//   // Serial.println(F("------------------------------------"));
+//   // Serial.print  (F("TSL2591 Gain:         "));
+//   // tsl2591Gain_t gain = tsl.getGain();
+//   // switch(gain)
+//   // {
+//   //   case TSL2591_GAIN_LOW:
+//   //     Serial.println(F("1x (Low)"));
+//   //     break;
+//   //   case TSL2591_GAIN_MED:
+//   //     Serial.println(F("25x (Medium)"));
+//   //     break;
+//   //   case TSL2591_GAIN_HIGH:
+//   //     Serial.println(F("428x (High)"));
+//   //     break;
+//   //   case TSL2591_GAIN_MAX:
+//   //     Serial.println(F("9876x (Max)"));
+//   //     break;
+//   // }
+// }
 /*******************************************************************************/
 
 
@@ -299,6 +381,8 @@ void sample(){
   sampleTime();
   sampleBNO055();
   sampleGps();
+  sampleDht22();
+  // sampleTsl2591();
 
 }
 
@@ -452,6 +536,43 @@ void sampleGps(){
   }
 }
 
+void sampleDht22(){
+  sensors_event_t event;
+  dht.temperature().getEvent(&event);
+  if (isnan(event.temperature)) {
+    Serial.println(F("Error reading temperature!"));
+  }
+  else {
+    Serial.print(F("Temperature: "));
+    Serial.print(event.temperature);
+    Serial.println(F("°C"));
+  }
+  // Get humidity event and print its value.
+  dht.humidity().getEvent(&event);
+  if (isnan(event.relative_humidity)) {
+    Serial.println(F("Error reading humidity!"));
+  }
+  else {
+    Serial.print(F("Humidity: "));
+    Serial.print(event.relative_humidity);
+    Serial.println(F("%"));
+  }
+}
+
+// void sampleTsl2591(){
+//   // More advanced data read example. Read 32 bits with top 16 bits IR, bottom 16 bits full spectrum
+//   // That way you can do whatever math and comparisons you want!
+//   uint32_t lum = tsl.getFullLuminosity();
+//   uint16_t ir, full;
+//   ir = lum >> 16;
+//   full = lum & 0xFFFF;
+//   Serial.print(F("[ ")); Serial.print(millis()); Serial.print(F(" ms ] "));
+//   Serial.print(F("IR: ")); Serial.print(ir);  Serial.print(F("  "));
+//   Serial.print(F("Full: ")); Serial.print(full); Serial.print(F("  "));
+//   Serial.print(F("Visible: ")); Serial.print(full - ir); Serial.print(F("  "));
+//   Serial.print(F("Lux: ")); Serial.println(tsl.calculateLux(full, ir), 6);
+// }
+
 ////////// write data to sd card ////////// 
 void writeGeneralInfoToCard(const char *dataSavePath, const char *fileTop, const char*equippedSensors, const char *fileHead){
   // if SD.eists()
@@ -485,8 +606,6 @@ void writeToFile(const char *dataSavePath){
 
   appendFile(SD, dataSavePath, dataLine);
 }
-
-
 
 void listDir(fs::FS &fs, const char * dirname, uint8_t levels){
     Serial.printf("Listing directory: %s\n", dirname);
@@ -670,7 +789,7 @@ void printEverything(){
   Serial.print("GPS altitude: ");
   Serial.println(floatData.gpsReading.altitude);
   Serial.print("GPS speed: ");
-  Serial.print(floatData.gpsReading.speed);
+  Serial.println(floatData.gpsReading.speed);
   // Serial.print("GPS time: ");
   // Serial.println(floatData.gpsReading.time);
   Serial.println();
